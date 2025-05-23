@@ -96,4 +96,10 @@ This project is licensed under the GNU General Public License v3.0 - see the [LI
 ## Acknowledgments
 
 - Thanks to all contributors
-- Inspired by various CORS security tools 
+- Inspired by various CORS security tools
+
+
+## Screenshot
+
+
+![alt text](https://github.com/MorphyKutay/Corrssy/blob/main/corrssy.png)
