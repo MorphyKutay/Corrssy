@@ -78,26 +78,45 @@ async fn check_origin(client: reqwest::Client, url: String, origin: String, verb
     
     if let Some(allow_origin) = cors_headers.get("access-control-allow-origin") {
         let allow_origin_str = allow_origin.to_str()?;
-        println!("{}", "Access-Control-Allow-Origin found:".green());
-        println!("  Value: {}", allow_origin_str);
         
         if allow_origin_str == "*" {
             println!("{}", "⚠️  WARNING: Access-Control-Allow-Origin is set to *!".red());
+            println!("{}", "VULNERABLE: Server allows requests from any origin".green());
         } else if allow_origin_str == origin {
-            println!("{}", "✅ Origin is properly validated.".green());
+            println!("{}", "Access-Control-Allow-Origin found:".white());
+            println!("  Value: {}", allow_origin_str);
+            println!("{}", "✅ Origin is properly validated.".white());
+        } else {
+            println!("{}", "Access-Control-Allow-Origin found:".white());
+            println!("  Value: {}", allow_origin_str);
+            println!("{}", "✅ Origin validation is strict.".white());
         }
     } else {
         println!("{}", "❌ Access-Control-Allow-Origin header not found.".red());
     }
 
     if let Some(allow_credentials) = cors_headers.get("access-control-allow-credentials") {
-        println!("{}", "Access-Control-Allow-Credentials found:".green());
-        println!("  Value: {}", allow_credentials.to_str()?);
+        let credentials_str = allow_credentials.to_str()?;
+        if credentials_str == "true" {
+            println!("{}", "Access-Control-Allow-Credentials found:".white());
+            println!("  Value: {}", credentials_str);
+            println!("{}", "VULNERABLE: Server allows credentials in CORS requests".green());
+        } else {
+            println!("{}", "Access-Control-Allow-Credentials found:".white());
+            println!("  Value: {}", credentials_str);
+        }
     }
 
     if let Some(allow_methods) = cors_headers.get("access-control-allow-methods") {
-        println!("{}", "Access-Control-Allow-Methods found:".green());
-        println!("  Value: {}", allow_methods.to_str()?);
+        let methods_str = allow_methods.to_str()?;
+        if methods_str.contains("*") {
+            println!("{}", "Access-Control-Allow-Methods found:".white());
+            println!("  Value: {}", methods_str);
+            println!("{}", "VULNERABLE: Server allows all HTTP methods".green());
+        } else {
+            println!("{}", "Access-Control-Allow-Methods found:".white());
+            println!("  Value: {}", methods_str);
+        }
     }
 
     if verbose {
