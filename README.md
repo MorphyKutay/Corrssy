@@ -60,7 +60,7 @@ corrssy -u https://example.com -v -t 10
 
 Scan multiple URLs from file:
 ```bash
-corrssy -r urls.txt -v
+corrssy --file urls.txt -v
 ```
 
 ## What it Checks
