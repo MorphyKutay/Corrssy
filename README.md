@@ -5,12 +5,14 @@ A fast and efficient CORS (Cross-Origin Resource Sharing) vulnerability scanner 
 ## Features
 
 - 🔍 Scans for CORS misconfigurations
+- 🌐 Web crawling capability
 - ⚡ Parallel request processing
-- 🔒 SSL/TLS support with invalid certificate handling
+- 🔒 SSL/TLS support with rustls
 - 📝 Detailed verbose output mode
 - ⏱️ Configurable timeout
 - 📋 Support for URL lists from file
 - 🎨 Colored output for better readability
+- 🔗 Multiple link type detection (a, link, script, img, form)
 
 ## Installation
 
@@ -43,12 +45,25 @@ Scan URLs from a file:
 corrssy -r urls.txt
 ```
 
+### Crawl Mode
+
+Crawl a website and check all found links for CORS vulnerabilities:
+```bash
+corrssy -c -u https://example.com
+```
+
+Crawl with verbose output:
+```bash
+corrssy -c -u https://example.com -v
+```
+
 ### Options
 
 - `-u, --url <URL>`        Target URL to scan
 - `-r, --file <file>`      File containing list of URLs
 - `-v, --verbose`          Verbose output mode
 - `-t, --timeout <sec>`    Timeout in seconds (default: 5)
+- `-c, --crawl`            Crawl mode
 - `-h, --help`             Show help message
 
 ### Examples
@@ -58,9 +73,14 @@ Verbose mode with custom timeout:
 corrssy -u https://example.com -v -t 10
 ```
 
-Scan multiple URLs from file:
+Crawl mode with verbose output:
 ```bash
-corrssy --file urls.txt -v
+corrssy -c -u https://example.com -v
+```
+
+Scan multiple URLs from file with crawl mode:
+```bash
+corrssy -c -r urls.txt -v
 ```
 
 ## What it Checks
@@ -71,15 +91,33 @@ corrssy --file urls.txt -v
 - Wildcard (*) CORS policies
 - Origin validation
 
+## Link Detection
+
+The crawler can detect links from various HTML elements:
+- `<a>` tags (href attribute)
+- `<link>` tags (CSS, favicon, etc.)
+- `<script>` tags (JavaScript files)
+- `<img>` tags (Images)
+- `<form>` tags (Form actions)
+
 ## Output Example
 
 ```
-Scanning URL: https://example.com
+Crawling URL: https://example.com
+Found 5 unique links to check
+
 Origin: https://evil.com
 Access-Control-Allow-Origin found:
   Value: https://evil.com
 ✅ Origin is properly validated.
 ```
+
+## Troubleshooting
+
+If you encounter SSL/TLS issues:
+1. Try using verbose mode (`-v`) to see detailed error messages
+2. Increase the timeout value (`-t`) if the site is slow to respond
+3. Try a different URL if the site has bot protection
 
 ## Contributing
 

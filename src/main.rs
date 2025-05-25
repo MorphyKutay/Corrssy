@@ -8,6 +8,13 @@ use std::io::{self, BufRead};
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
+use html5ever::parse_document;
+use html5ever::tendril::TendrilSink;
+use markup5ever_rcdom::{Handle, NodeData, RcDom};
+use url::Url;
+use reqwest::ClientBuilder;
+use rustls::RootCertStore;
+use webpki_roots::TLS_SERVER_ROOTS;
 
 const BANNER: &str = r#"
 
@@ -44,6 +51,10 @@ struct Args {
     /// Timeout in seconds
     #[arg(short, long, default_value = "5")]
     timeout: u64,
+
+    /// Crawl mode
+    #[arg(short, long)]
+    crawl: bool,
 }
 
 fn normalize_url(url: &str) -> String {
@@ -129,18 +140,106 @@ async fn check_origin(client: reqwest::Client, url: String, origin: String, verb
     Ok(())
 }
 
+async fn create_client(timeout: u64) -> Result<reqwest::Client, Box<dyn Error>> {
+    let mut root_store = RootCertStore::empty();
+    root_store.add_trust_anchors(
+        TLS_SERVER_ROOTS.iter().map(|ta| {
+            rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
+                ta.subject,
+                ta.spki,
+                ta.name_constraints,
+            )
+        })
+    );
+
+    let config = rustls::ClientConfig::builder()
+        .with_safe_defaults()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+
+    let client = ClientBuilder::new()
+        .use_rustls_tls()
+        .timeout(Duration::from_secs(timeout))
+        .build()?;
+
+    Ok(client)
+}
+
+async fn crawl_and_check_cors(url: &str, verbose: bool, timeout: u64) -> Result<(), Box<dyn Error>> {
+    let normalized_url = normalize_url(url);
+    println!("\n{}", format!("Crawling URL: {}", normalized_url).cyan());
+    
+    let client = create_client(timeout).await?;
+
+    if verbose {
+        println!("{}", "Attempting to fetch the page...".yellow());
+    }
+
+    let response = match client.get(&normalized_url).send().await {
+        Ok(resp) => resp,
+        Err(e) => {
+            println!("{}", format!("Error connecting to {}: {}", normalized_url, e).red());
+            println!("{}", "Trying with HTTP instead of HTTPS...".yellow());
+            let http_url = normalized_url.replace("https://", "http://");
+            match client.get(&http_url).send().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    println!("{}", format!("Failed to connect with HTTP: {}", e).red());
+                    return Err(Box::new(e));
+                }
+            }
+        }
+    };
+
+    if verbose {
+        println!("{}", format!("Response status: {}", response.status()).yellow());
+    }
+
+    let html = response.text().await?;
+
+    if verbose {
+        println!("{}", "Parsing HTML content...".yellow());
+        println!("{}", format!("HTML content length: {} bytes", html.len()).yellow());
+    }
+
+    let dom = parse_document(RcDom::default(), Default::default())
+        .from_utf8()
+        .read_from(&mut html.as_bytes())?;
+
+    let mut urls = Vec::new();
+    find_links(&dom.document, &normalized_url, &mut urls);
+
+    // Tekrarlanan URL'leri kaldır
+    urls.sort();
+    urls.dedup();
+
+    println!("{}", format!("Found {} unique links to check", urls.len()).yellow());
+
+    if verbose {
+        println!("{}", "Links found:".yellow());
+        for url in &urls {
+            println!("  {}", url);
+        }
+    }
+
+    for url in urls {
+        if let Err(e) = scan_url(&url, verbose, timeout).await {
+            println!("{}", format!("Error scanning {}: {}", url, e).red());
+        }
+    }
+
+    Ok(())
+}
+
 async fn scan_url(url: &str, verbose: bool, timeout: u64) -> Result<(), Box<dyn Error>> {
     let normalized_url = normalize_url(url);
     println!("\n{}", format!("Scanning URL: {}", normalized_url).cyan());
     
     if verbose {
-        println!("{}", "Disabling SSL verification...".yellow());
+        println!("{}", "Creating HTTP client...".yellow());
     }
 
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(Duration::from_secs(timeout))
-        .build()?;
+    let client = create_client(timeout).await?;
     
     let origins = vec![
         "https://evil.com",
@@ -169,6 +268,81 @@ async fn scan_url(url: &str, verbose: bool, timeout: u64) -> Result<(), Box<dyn 
     Ok(())
 }
 
+fn find_links(handle: &Handle, base_url: &str, urls: &mut Vec<String>) {
+    let node = handle;
+    match node.data {
+        NodeData::Element { ref name, ref attrs, .. } => {
+            let tag_name = name.local.as_ref();
+            let attributes = attrs.borrow();
+            
+            // Link içeren etiketleri kontrol et
+            match tag_name {
+                "a" => {
+                    for attr in attributes.iter() {
+                        if attr.name.local.as_ref() == "href" {
+                            if let Ok(absolute_url) = Url::parse(base_url).and_then(|base| {
+                                base.join(&attr.value)
+                            }) {
+                                urls.push(absolute_url.to_string());
+                            }
+                        }
+                    }
+                },
+                "link" => {
+                    for attr in attributes.iter() {
+                        if attr.name.local.as_ref() == "href" {
+                            if let Ok(absolute_url) = Url::parse(base_url).and_then(|base| {
+                                base.join(&attr.value)
+                            }) {
+                                urls.push(absolute_url.to_string());
+                            }
+                        }
+                    }
+                },
+                "script" => {
+                    for attr in attributes.iter() {
+                        if attr.name.local.as_ref() == "src" {
+                            if let Ok(absolute_url) = Url::parse(base_url).and_then(|base| {
+                                base.join(&attr.value)
+                            }) {
+                                urls.push(absolute_url.to_string());
+                            }
+                        }
+                    }
+                },
+                "img" => {
+                    for attr in attributes.iter() {
+                        if attr.name.local.as_ref() == "src" {
+                            if let Ok(absolute_url) = Url::parse(base_url).and_then(|base| {
+                                base.join(&attr.value)
+                            }) {
+                                urls.push(absolute_url.to_string());
+                            }
+                        }
+                    }
+                },
+                "form" => {
+                    for attr in attributes.iter() {
+                        if attr.name.local.as_ref() == "action" {
+                            if let Ok(absolute_url) = Url::parse(base_url).and_then(|base| {
+                                base.join(&attr.value)
+                            }) {
+                                urls.push(absolute_url.to_string());
+                            }
+                        }
+                    }
+                },
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+
+    for child in node.children.borrow().iter() {
+        find_links(child, base_url, urls);
+    }
+}
+
 fn read_urls_from_file<P>(filename: P) -> io::Result<Vec<String>>
 where
     P: AsRef<Path>,
@@ -188,6 +362,7 @@ fn print_help() {
     println!("  -r, --file <file>      File containing list of URLs");
     println!("  -v, --verbose          Verbose output mode");
     println!("  -t, --timeout <sec>    Timeout in seconds (default: 5)");
+    println!("  -c, --crawl            Crawl mode");
     println!("  -h, --help             Show this help message");
     println!("\n{}", "Examples:".yellow());
     println!("  corrssy -u https://example.com");
@@ -208,13 +383,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("{}", "Starting CORS Scanner...".green());
 
     if let Some(url) = args.url {
-        scan_url(&url, args.verbose, args.timeout).await?;
+        if args.crawl {
+            crawl_and_check_cors(&url, args.verbose, args.timeout).await?;
+        } else {
+            scan_url(&url, args.verbose, args.timeout).await?;
+        }
     } else if let Some(file_path) = args.file {
         let urls = read_urls_from_file(file_path)?;
         for url in urls {
             if !url.trim().is_empty() {
-                if let Err(e) = scan_url(&url.trim(), args.verbose, args.timeout).await {
-                    println!("{}", format!("Error: {} - URL: {}", e, url).red());
+                if args.crawl {
+                    if let Err(e) = crawl_and_check_cors(&url.trim(), args.verbose, args.timeout).await {
+                        println!("{}", format!("Error: {} - URL: {}", e, url).red());
+                    }
+                } else {
+                    if let Err(e) = scan_url(&url.trim(), args.verbose, args.timeout).await {
+                        println!("{}", format!("Error: {} - URL: {}", e, url).red());
+                    }
                 }
             }
         }
